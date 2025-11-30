@@ -281,7 +281,6 @@ with tab_viz:
     # Promotion/Attrition by department (mean)
     if "Attrition" in filtered_df.columns:
         promo_by_dept = filtered_df.groupby("Department")["Attrition"].mean().reset_index()
-        fig = px := None
         try:
             import plotly.express as px
             fig = px.bar(promo_by_dept, x="Department", y="Attrition", title="Attrition Rate by Department")
@@ -411,3 +410,4 @@ with tab_download:
 with st.expander("Show detected/renamed columns (for debugging)"):
     st.write("Renamed columns mapping:", rename_map)
     st.write("Current dataframe columns:", filtered_df.columns.tolist())
+
