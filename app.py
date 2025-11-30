@@ -1,21 +1,25 @@
-
+# app.py - Full HR Analytics Dashboard (Dashboard + ML + Upload + preloaded.json)
 import streamlit as st
 import pandas as pd
 import numpy as np
+import pickle
 import matplotlib.pyplot as plt
 import seaborn as sns
 import json
-from io import StringIO
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.preprocessing import OneHotEncoder
+
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
+from sklearn.exceptions import NotFittedError
+
 import plotly.express as px
 
 # -------- Configuration --------
-st.set_page_config(page_title="LIBA HR Analytics Dashboard", layout="wide", page_icon="📊")
+st.set_page_config(page_title="HR Analytics Dashboard", layout="wide", page_icon="📊")
 st.title("📊 LIBA HR Analytics Dashboard")
 
 # -------- Helpers & Sample Data (Indian salary bands, SalaryINR) --------
@@ -455,100 +459,206 @@ with tab_viz:
         fig_salary_role.update_layout(width=900, height=500, yaxis_title="Salary (INR)", xaxis_title="Job Role")
         st.plotly_chart(fig_salary_role, width='stretch')
 
-# -------- ML Model: Attrition --------
+# -------- AI Predictions Suite --------
+
 with tab_model:
-    st.subheader("AI: Attrition Prediction (Logistic Regression)")
+    st.header("🤖 AI Predictions (Attrition / Salary / Performance / Promotion / Absenteeism)")
 
-    recommended_features = ["Age", "ExperienceYears", "PerformanceScore", "SalaryINR", "Department", "JobRole", "Gender"]
-    available_features = [f for f in recommended_features if f in filtered_df.columns]
-    st.write("Features available for model:", available_features)
-    sel_features = st.multiselect("Select features to use for model", options=available_features, default=available_features)
+    # ----- Define per-model features (only use columns we expect in this app) -----
+    FEATURES = {
+        "Attrition": ["Age", "ExperienceYears", "PerformanceScore", "SalaryINR", "Department", "JobRole", "Gender"],
+        "Salary Prediction (INR)": ["Age", "ExperienceYears", "PerformanceScore", "Department", "JobRole", "Gender"],
+        "Performance Score Prediction": ["Age", "ExperienceYears", "SalaryINR", "Department", "JobRole", "Gender"],
+        "Promotion Eligibility": ["ExperienceYears", "PerformanceScore", "SalaryINR", "Department", "JobRole"],
+        "Absenteeism Risk": ["Age", "ExperienceYears", "Department", "JobRole", "PerformanceScore"]
+    }
 
-    if "Attrition" not in filtered_df.columns:
-        st.error("No 'Attrition' column found — cannot train model.")
-    else:
-        unique_classes = filtered_df["Attrition"].dropna().unique()
-        if len(unique_classes) < 2:
-            st.error(f"Target column 'Attrition' has only one class: {unique_classes}. Provide a dataset with both 0 and 1.")
-        elif not sel_features:
-            st.warning("Select at least one feature to train the model.")
-        else:
-            model_df = filtered_df[sel_features + ["Attrition"]].dropna()
-            if len(model_df) < 50:
-                st.warning("Dataset is small; model results may be unreliable. Prefer >50 rows.")
-            X = model_df[sel_features].copy()
-            y = model_df["Attrition"].astype(int)
+    # ----- Models chosen per task -----
+    MODELS = {
+        "Attrition": RandomForestClassifier(n_estimators=300, max_depth=12, class_weight="balanced", random_state=42),
+        "Salary Prediction (INR)": RandomForestRegressor(n_estimators=400, max_depth=15, random_state=42),
+        "Performance Score Prediction": GradientBoostingRegressor(n_estimators=300, random_state=42),
+        "Promotion Eligibility": RandomForestClassifier(n_estimators=300, max_depth=12, class_weight="balanced", random_state=42),
+        "Absenteeism Risk": RandomForestClassifier(n_estimators=300, max_depth=12, class_weight="balanced", random_state=42)
+    }
 
-            numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
-            categorical_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    st.markdown("### Choose prediction")
+    prediction_choice = st.selectbox("Prediction type:", list(FEATURES.keys()))
 
-            # coerce numeric columns if encoded as strings
-            for col in numeric_cols:
-                X[col] = pd.to_numeric(X[col], errors="coerce")
+    selected_features = [c for c in FEATURES[prediction_choice] if c in df.columns]
+    missing = [c for c in FEATURES[prediction_choice] if c not in df.columns]
+    if missing:
+        st.warning(f"Note: these expected columns are missing from the dataset and will not be used: {missing}")
 
-            if X.shape[1] == 0:
-                st.error("No usable features found after preprocessing.")
+    st.markdown("### Enter input values")
+    # dynamic inputs: show appropriate input controls based on feature type/name
+    user_input = {}
+    cols_left, cols_right = st.columns(2)
+    for i, feat in enumerate(selected_features):
+        container = cols_left if (i % 2 == 0) else cols_right
+        with container:
+            if feat in ["Department", "JobRole", "Gender"]:
+                opts = sorted(df[feat].dropna().unique().tolist())
+                if not opts:
+                    opts = ["Unknown"]
+                user_input[feat] = st.selectbox(feat, opts, index=0)
             else:
-                # Train-test split
-                strat = y if y.nunique() > 1 else None
-                try:
-                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42, stratify=strat)
-                except Exception:
-                    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
-
-                # ColumnTransformer and Pipeline (OneHotEncoder with sparse_output=False)
-                preprocessor = ColumnTransformer(
-                    transformers=[
-                        ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols)
-                    ],
-                    remainder="passthrough"
-                )
-
-                pipeline = Pipeline(steps=[
-                    ("preproc", preprocessor),
-                    ("clf", LogisticRegression(max_iter=5000))
-                ])
-
-                try:
-                    pipeline.fit(X_train, y_train)
-                except Exception as e:
-                    st.error(f"Model training failed: {e}")
+                # numeric -- provide a sensible range based on dataset
+                col_series = pd.to_numeric(df[feat], errors="coerce")
+                col_min = int(np.nanmin(col_series)) if pd.notna(col_series.min()) else 0
+                col_max = int(np.nanmax(col_series)) if pd.notna(col_series.max()) else col_min + 10
+                median = int(col_series.median()) if pd.notna(col_series.median()) else (col_min + col_max) // 2
+                # make bounds slightly wider so users can explore
+                min_safe = max(0, col_min - int(abs(col_min)*0.2 + 1))
+                max_safe = int(col_max + max(10, abs(col_max)*0.2))
+                # pick slider for reasonable range, number_input if range huge
+                if feat == "SalaryINR":
+                    user_input[feat] = st.number_input(feat, min_value=0, value=median, step=1000)
                 else:
-                    y_pred = pipeline.predict(X_test)
+                    # use slider when range small
+                    if max_safe - min_safe <= 1000:
+                        user_input[feat] = st.slider(feat, min_value=min_safe, max_value=max_safe, value=median)
+                    else:
+                        user_input[feat] = st.number_input(feat, value=median, min_value=min_safe, max_value=max_safe)
+
+    # Push missing features with defaults (if any required numeric missing from df, fill reasonable default)
+    for feat in selected_features:
+        if feat not in user_input:
+            # fallback defaults
+            if feat in ["Department", "JobRole", "Gender"]:
+                user_input[feat] = df[feat].dropna().unique()[0] if feat in df.columns and len(df[feat].dropna())>0 else "Unknown"
+            else:
+                user_input[feat] = int(df[feat].dropna().median()) if feat in df.columns and df[feat].dropna().shape[0]>0 else 0
+
+    st.markdown("---")
+
+    # Prepare input DataFrame
+    input_df = pd.DataFrame([user_input])[selected_features]  # ensure column order
+
+    # Build preprocessor (determine numeric vs categorical from selected_features)
+    numeric_cols = [c for c in selected_features if np.issubdtype(df[c].dtype, np.number)]
+    categorical_cols = [c for c in selected_features if c not in numeric_cols]
+
+    # use StandardScaler for numeric columns (works for both classification/regression here)
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), numeric_cols) if numeric_cols else ("num", "passthrough", []),
+            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), categorical_cols) if categorical_cols else ("cat", "passthrough", [])
+        ],
+        remainder="drop"
+    )
+
+    # model pipeline
+    model_obj = MODELS[prediction_choice]
+    pipeline = Pipeline([("pre", preprocessor), ("model", model_obj)])
+
+    # target column mapping for training
+    # prefer real columns if present, otherwise cannot train
+    target_map = {
+        "Attrition": "Attrition",
+        "Salary Prediction (INR)": "SalaryINR",
+        "Performance Score Prediction": "PerformanceScore",
+        "Promotion Eligibility": "Attrition",       # proxy: treat recent attrition/promotion as label if no explicit promoted column
+        "Absenteeism Risk": "Attrition"            # proxy (use attrition as risk-ish target) — replace when real target available
+    }
+    target_col = target_map[prediction_choice]
+    model_filename = "prediction_models/" + f"model_{prediction_choice.replace(' ', '_').lower()}.pkl"
+
+    can_train = (target_col in df.columns) and (df[target_col].dropna().shape[0] > 10)
+
+    # Train/load model
+    trained_model = None
+    if can_train:
+        # Prepare training data X_train, y_train (dropna on required cols + target)
+        train_df = df[selected_features + [target_col]].dropna()
+        X_all = train_df[selected_features]
+        y_all = train_df[target_col].astype(float) if np.issubdtype(train_df[target_col].dtype, np.number) else train_df[target_col]
+
+        # For classification tasks, ensure at least 2 classes
+        is_classification = prediction_choice in ["Attrition", "Promotion Eligibility", "Absenteeism Risk"]
+        if is_classification:
+            if y_all.nunique() < 2:
+                st.warning(f"Target '{target_col}' does not have at least 2 classes; training skipped.")
+                can_train = False
+
+    # Try to load saved model first
+    if can_train:
+        try:
+            trained_model = pickle.load(open(model_filename, "rb"))
+            st.info(f"Loaded saved model: {model_filename}")
+        except Exception:
+            st.info("No saved model found — training a new model (this may take a few seconds).")
+            try:
+                # For classification, stratify split where possible
+                if is_classification:
+                    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.25, random_state=42, stratify=y_all)
+                else:
+                    X_train, X_test, y_train, y_test = train_test_split(X_all, y_all, test_size=0.25, random_state=42)
+
+                pipeline.fit(X_train, y_train)
+                y_pred = pipeline.predict(X_test)
+                # Save
+                pickle.dump(pipeline, open(model_filename, "wb"))
+                trained_model = pipeline
+                # Show simple metric for classification
+                if is_classification:
                     acc = accuracy_score(y_test, y_pred)
-                    st.success(f"Model trained — accuracy on holdout: {acc*100:.2f}%")
+                    st.success(f"Model trained. Holdout accuracy: {acc*100:.2f}%")
+                else:
+                    st.success("Regression model trained and saved.")
+            except Exception as e:
+                st.error(f"Training failed: {e}")
+                can_train = False
 
-                    # Interactive prediction UI
-                    st.markdown("### Try a prediction")
-                    input_vals = {}
-                    for feat in sel_features:
-                        if feat in numeric_cols:
-                            col_min = int(float(X[feat].min())) if not pd.isna(X[feat].min()) else 0
-                            col_max = int(float(X[feat].max())) if not pd.isna(X[feat].max()) else col_min + 1
-                            col_median = int(float(X[feat].median())) if not pd.isna(X[feat].median()) else col_min
-                            if col_min == col_max:
-                                col_min = max(0, col_min - 1)
-                                col_max = col_max + 1
-                            input_vals[feat] = st.number_input(feat, value=col_median, min_value=col_min, max_value=col_max)
+    else:
+        st.warning(f"Cannot train model — target column '{target_col}' not available or insufficient data. Prediction will attempt using saved model if present.")
+
+        # try load model even if can't train
+        try:
+            trained_model = pickle.load(open(model_filename, "rb"))
+            st.info(f"Loaded saved model: {model_filename} (no retrain)")
+        except Exception:
+            st.info("No pre-trained model available.")
+
+    st.markdown("---")
+
+    # Prediction action
+    if st.button("Run Prediction"):
+        if trained_model is None:
+            st.error("No trained model available to make a prediction. Provide target column in dataset or place a pre-trained model file.")
+        else:
+            try:
+                pred = trained_model.predict(input_df)
+                result = pred[0]
+                # classification: show probabilities if available
+                if prediction_choice in ["Attrition", "Promotion Eligibility", "Absenteeism Risk"]:
+                    # probabilities
+                    proba = None
+                    try:
+                        proba = trained_model.predict_proba(input_df)[0]
+                    except Exception:
+                        proba = None
+                    st.write("### Prediction result")
+                    st.write(f"**{prediction_choice}** → **{result}**")
+                    if proba is not None:
+                        # for binary: show prob of class 1 if two classes
+                        if len(proba) == 2:
+                            st.write(f"Probability of positive (class 1): {proba[1]*100:.2f}%")
                         else:
-                            opts = sorted(X[feat].dropna().unique().tolist())
-                            if not opts:
-                                opts = ["Unknown"]
-                            input_vals[feat] = st.selectbox(feat, options=opts, index=0)
+                            st.write("Class probabilities:", {str(i): f"{p*100:.2f}%" for i, p in enumerate(proba)})
+                else:
+                    # regression result
+                    if prediction_choice == "Salary Prediction (INR)":
+                        st.write("### Estimated Salary (INR)")
+                        st.metric("Estimated Salary", f"₹{int(result):,}")
+                    else:
+                        st.write("### Prediction result")
+                        st.write(result)
+            except NotFittedError:
+                st.error("Model is not fitted. Try training a model first.")
+            except Exception as e:
+                st.error(f"Prediction failed: {e}")
 
-                    if st.button("Predict Attrition"):
-                        single_df = pd.DataFrame([input_vals])
-                        for nc in numeric_cols:
-                            if nc in single_df.columns:
-                                single_df[nc] = pd.to_numeric(single_df[nc], errors="coerce")
-                        try:
-                            pred = pipeline.predict(single_df)[0]
-                            proba = pipeline.predict_proba(single_df)[0] if hasattr(pipeline, "predict_proba") else None
-                            st.write(f"Prediction: **{pred}**  (0 = stay, 1 = leave)")
-                            if proba is not None:
-                                st.write(f"Probabilities: stay={proba[0]:.2f}, leave={proba[1]:.2f}")
-                        except Exception as e:
-                            st.error(f"Prediction failed: {e}")
 
 # -------- Heatmap --------
 with tab_heatmap:
