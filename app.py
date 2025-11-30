@@ -1,4 +1,4 @@
-# app.py - Full HR Analytics Dashboard (Dashboard + ML + Upload + preloaded.json)
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -15,8 +15,8 @@ from sklearn.metrics import accuracy_score
 import plotly.express as px
 
 # -------- Configuration --------
-st.set_page_config(page_title="HR Analytics Dashboard", layout="wide", page_icon="📊")
-st.title("📊 HR Analytics Dashboard — Full (INR salaries)")
+st.set_page_config(page_title="LIBA HR Analytics Dashboard", layout="wide", page_icon="📊")
+st.title("📊 LIBA HR Analytics Dashboard")
 
 # -------- Helpers & Sample Data (Indian salary bands, SalaryINR) --------
 @st.cache_data
@@ -271,48 +271,189 @@ with tab_overview:
 with tab_viz:
     st.subheader("Visual Insights")
 
-    # Gender counts
+    # ---------- Color palettes ----------
+    gender_colors = {"Male": "#1f77b4", "Female": "#ff7f0e"}  # Blue & Orange
+    dept_colors = {
+        "Sales": "#636EFA",
+        "HR": "#EF553B",
+        "IT": "#00CC96",
+        "Finance": "#AB63FA",
+        "Operations": "#FFA15A"
+    }
+
+    # ---------- 1. Gender Distribution Pie Chart (3D-like donut) ----------
     if "Gender" in filtered_df.columns:
-        fig = plt.figure(figsize=(4, 3))
-        ax = fig.add_subplot(111)
-        sns.countplot(data=filtered_df, x="Gender", order=filtered_df["Gender"].value_counts().index, ax=ax)
-        ax.set_title("Gender Counts")
-        st.pyplot(fig)
-        plt.close(fig)
+        gender_counts = filtered_df["Gender"].value_counts().reset_index()
+        gender_counts.columns = ["Gender", "Count"]
 
-    # Department counts
+        fig_gender = px.pie(
+            gender_counts,
+            names="Gender",
+            values="Count",
+            title="Gender Distribution",
+            color="Gender",
+            color_discrete_map=gender_colors,
+            hole=0.4  # donut style
+        )
+        fig_gender.update_traces(marker=dict(line=dict(width=0)))  # remove black outline
+        fig_gender.update_layout(width=700, height=500)
+        st.plotly_chart(fig_gender, width='stretch')
+
+    # ---------- 2. Department Distribution Line Chart ----------
     if "Department" in filtered_df.columns:
-        fig = plt.figure(figsize=(6, 3))
-        ax = fig.add_subplot(111)
-        sns.countplot(data=filtered_df, x="Department", order=filtered_df["Department"].value_counts().index, ax=ax)
-        ax.set_title("Employees by Department")
-        plt.xticks(rotation=45)
-        st.pyplot(fig)
-        plt.close(fig)
+        dept_counts = filtered_df["Department"].value_counts().reset_index()
+        dept_counts.columns = ["Department", "Count"]
 
-    # Salary distribution (INR)
-    if "SalaryINR" in filtered_df.columns and filtered_df["SalaryINR"].notna().any():
-        fig = plt.figure(figsize=(6, 3))
-        ax = fig.add_subplot(111)
-        sns.histplot(filtered_df["SalaryINR"].dropna(), kde=True, ax=ax)
-        ax.set_title("Salary Distribution (INR)")
-        st.pyplot(fig)
-        plt.close(fig)
+        fig_dept = px.line(
+            dept_counts.sort_values("Department"),
+            x="Department",
+            y="Count",
+            title="Employees by Department (Trend)",
+            markers=True,
+            color_discrete_sequence=["#636EFA"]
+        )
+        fig_dept.update_layout(width=800, height=450, yaxis_title="Number of Employees")
+        st.plotly_chart(fig_dept, width='stretch')
 
-    # Attrition by department
+    # ---------- 3. Salary Distribution by Department (Violin) ----------
+    if "SalaryINR" in filtered_df.columns:
+        fig_salary = px.violin(
+            filtered_df,
+            y="SalaryINR",
+            x="Department",
+            color="Department",
+            box=True,
+            points="all",
+            title="Salary Distribution by Department (INR)",
+            color_discrete_map=dept_colors
+        )
+        fig_salary.update_layout(width=900, height=500, yaxis_title="Salary (INR)", xaxis_title="Department")
+        st.plotly_chart(fig_salary, width='stretch')
+
+    # ---------- 4. Attrition Rate by Department (Line) ----------
     if "Attrition" in filtered_df.columns:
-        promo_by_dept = filtered_df.groupby("Department")["Attrition"].mean().reset_index()
-        try:
-            fig_px = px.bar(promo_by_dept, x="Department", y="Attrition", title="Attrition Rate by Department")
-            st.plotly_chart(fig_px, width="stretch")
-        except Exception:
-            fig = plt.figure(figsize=(6, 3))
-            ax = fig.add_subplot(111)
-            sns.barplot(data=promo_by_dept, x="Department", y="Attrition", ax=ax)
-            ax.set_title("Attrition Rate by Department")
-            plt.xticks(rotation=45)
-            st.pyplot(fig)
-            plt.close(fig)
+        attr_dept = filtered_df.groupby("Department")["Attrition"].mean().reset_index()
+        attr_dept["AttritionRate"] = attr_dept["Attrition"] * 100
+
+        fig_attr = px.line(
+            attr_dept.sort_values("Department"),
+            x="Department",
+            y="AttritionRate",
+            markers=True,
+            title="Attrition Rate by Department (%)",
+            color_discrete_sequence=["#EF553B"]
+        )
+        fig_attr.update_layout(width=800, height=450, yaxis_title="Attrition Rate (%)")
+        st.plotly_chart(fig_attr, width='stretch')
+
+    # ---------- 5. Average Experience by Department (Line) ----------
+    if "ExperienceYears" in filtered_df.columns:
+        exp_dept = filtered_df.groupby("Department")["ExperienceYears"].mean().reset_index()
+        fig_exp = px.line(
+            exp_dept.sort_values("Department"),
+            x="Department",
+            y="ExperienceYears",
+            markers=True,
+            title="Average Experience by Department (years)",
+            color_discrete_sequence=["#00CC96"]
+        )
+        fig_exp.update_layout(width=800, height=450, yaxis_title="Average Experience (yrs)")
+        st.plotly_chart(fig_exp, width='stretch')
+
+    # ---------- 6. Gender Distribution within Departments (Stacked) ----------
+    if "Gender" in filtered_df.columns and "Department" in filtered_df.columns:
+        import itertools
+        departments = filtered_df["Department"].unique()
+        genders = ["Male", "Female"]
+        all_combos = pd.DataFrame(list(itertools.product(departments, genders)), columns=["Department", "Gender"])
+        dept_gender = filtered_df.groupby(["Department", "Gender"]).size().reset_index(name="Count")
+        dept_gender = all_combos.merge(dept_gender, on=["Department", "Gender"], how="left").fillna(0)
+
+        fig_stacked = px.bar(
+            dept_gender,
+            x="Department",
+            y="Count",
+            color="Gender",
+            title="Gender Distribution within Departments",
+            text="Count",
+            color_discrete_map=gender_colors
+        )
+        fig_stacked.update_layout(width=900, height=500, yaxis_title="Number of Employees", xaxis_title="", barmode='stack')
+        fig_stacked.update_traces(textposition='inside')
+        st.plotly_chart(fig_stacked, width='stretch')
+
+
+    # ---------- 8. Salary vs Performance Scatter ----------
+    if all(col in filtered_df.columns for col in ["SalaryINR", "PerformanceScore"]):
+        fig_scatter = px.scatter(
+            filtered_df,
+            x="PerformanceScore",
+            y="SalaryINR",
+            color="Department",
+            hover_data=["EmployeeID", "JobRole", "Gender"],
+            title="Salary vs Performance Score",
+            color_discrete_map=dept_colors
+        )
+        fig_scatter.update_layout(width=900, height=500, xaxis_title="Performance Score", yaxis_title="Salary (INR)")
+        st.plotly_chart(fig_scatter, width='stretch')
+
+    # ---------- 9. Attrition vs Age (Scatter & Box Plot) ----------
+    if "Age" in filtered_df.columns and "Attrition" in filtered_df.columns:
+        fig_age = px.box(
+            filtered_df,
+            x="Attrition",
+            y="Age",
+            color="Attrition",
+            title="Attrition vs Age",
+            labels={"Attrition": "Attrition (0=Stay, 1=Leave)", "Age": "Age"},
+            color_discrete_map={0: "#1f77b4", 1: "#ff7f0e"}
+        )
+        fig_age.update_layout(width=800, height=500)
+        st.plotly_chart(fig_age, width='stretch')
+
+    # ---------- 10. Correlation Heatmap (numeric columns) ----------
+    numeric_cols = filtered_df.select_dtypes(include=[np.number]).columns.tolist()
+    if len(numeric_cols) > 1:
+        corr = filtered_df[numeric_cols].corr()
+        fig_corr = px.imshow(
+            corr,
+            text_auto=True,
+            color_continuous_scale="RdBu_r",
+            title="Correlation Heatmap (numeric columns)"
+        )
+        fig_corr.update_layout(width=900, height=500)
+        st.plotly_chart(fig_corr, width='stretch')
+
+    # ---------- 11. Top 5 JobRoles by Attrition Rate ----------
+    if "JobRole" in filtered_df.columns and "Attrition" in filtered_df.columns:
+        job_attr = filtered_df.groupby("JobRole")["Attrition"].mean().sort_values(ascending=False).reset_index()
+        top_jobs = job_attr.head(5)
+        fig_top_jobs = px.bar(
+            top_jobs,
+            x="JobRole",
+            y="Attrition",
+            text=top_jobs["Attrition"].round(2),
+            title="Top 5 Job Roles by Attrition Rate",
+            color="JobRole",
+            color_discrete_sequence=px.colors.qualitative.Bold
+        )
+        fig_top_jobs.update_traces(textposition='outside')
+        fig_top_jobs.update_layout(width=800, height=500, yaxis_title="Attrition Rate")
+        st.plotly_chart(fig_top_jobs, width='stretch')
+
+    # ---------- 12. Salary Distribution by JobRole ----------
+    if "SalaryINR" in filtered_df.columns and "JobRole" in filtered_df.columns:
+        fig_salary_role = px.violin(
+            filtered_df,
+            y="SalaryINR",
+            x="JobRole",
+            color="JobRole",
+            box=True,
+            points="all",
+            title="Salary Distribution by Job Role (INR)"
+        )
+        fig_salary_role.update_layout(width=900, height=500, yaxis_title="Salary (INR)", xaxis_title="Job Role")
+        st.plotly_chart(fig_salary_role, width='stretch')
 
 # -------- ML Model: Attrition --------
 with tab_model:
@@ -411,10 +552,10 @@ with tab_model:
 
 # -------- Heatmap --------
 with tab_heatmap:
-    st.subheader("Correlation Heatmap (numeric columns only)")
-    num_df = filtered_df.select_dtypes(include=[np.number]).dropna(axis=1, how="all")
-    num_df = num_df.drop(columns=["Attrition"], errors="ignore")
+    st.subheader("HR Metrics Correlation Heatmap")
 
+    # Select relevant numeric columns including Attrition
+    num_df = filtered_df.select_dtypes(include=[np.number]).copy()
     if num_df.shape[1] <= 1:
         st.warning("Not enough numeric columns for a correlation heatmap.")
     else:
@@ -422,10 +563,26 @@ with tab_heatmap:
         if corr.isnull().all().all():
             st.warning("Correlation matrix contains only NaN values — not enough numeric data.")
         else:
+            # Mask upper triangle for cleaner display
+            mask = np.triu(np.ones_like(corr, dtype=bool))
+
+            # Plot
             fig, ax = plt.subplots(figsize=(10, 6))
-            sns.heatmap(corr, annot=True, fmt=".2f", cmap="coolwarm", ax=ax)
+            sns.heatmap(
+                corr,
+                mask=mask,
+                annot=True,
+                fmt=".2f",
+                cmap="coolwarm",
+                center=0,
+                linewidths=1,
+                cbar_kws={"shrink": 0.8},
+                annot_kws={"size": 10}
+            )
+            ax.set_title("Correlation Heatmap: HR Metrics", fontsize=14)
             st.pyplot(fig)
             plt.close(fig)
+
 
 # -------- Download --------
 with tab_download:
