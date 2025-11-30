@@ -562,7 +562,7 @@ with tab_model:
         "Absenteeism Risk": "Attrition"            # proxy (use attrition as risk-ish target) — replace when real target available
     }
     target_col = target_map[prediction_choice]
-    model_filename = "prediction_models/" + f"model_{prediction_choice.replace(' ', '_').lower()}.pkl"
+    model_filename = f"model_{prediction_choice.replace(' ', '_').lower()}.pkl"
 
     can_train = (target_col in df.columns) and (df[target_col].dropna().shape[0] > 10)
 
@@ -704,3 +704,4 @@ with tab_download:
 with st.expander("Show detected/renamed columns (debug)"):
     st.write("Renamed columns mapping:", rename_map)
     st.write("Current dataframe columns:", filtered_df.columns.tolist())
+
